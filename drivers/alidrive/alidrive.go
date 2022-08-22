@@ -3,43 +3,16 @@ package alidrive
 import (
 	"errors"
 	"fmt"
-	"github.com/Xhofe/alist/conf"
 	"github.com/Xhofe/alist/drivers/base"
 	"github.com/Xhofe/alist/model"
 	"github.com/Xhofe/alist/utils"
 	"github.com/go-resty/resty/v2"
+	jsoniter "github.com/json-iterator/go"
 	log "github.com/sirupsen/logrus"
 	"path/filepath"
-	"strings"
-	"time"
 )
 
 var aliClient = resty.New()
-
-type AliRespError struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-}
-
-type AliFiles struct {
-	Items      []AliFile `json:"items"`
-	NextMarker string    `json:"next_marker"`
-}
-
-type AliFile struct {
-	DriveId       string     `json:"drive_id"`
-	CreatedAt     *time.Time `json:"created_at"`
-	FileExtension string     `json:"file_extension"`
-	FileId        string     `json:"file_id"`
-	Type          string     `json:"type"`
-	Name          string     `json:"name"`
-	Category      string     `json:"category"`
-	ParentFileId  string     `json:"parent_file_id"`
-	UpdatedAt     *time.Time `json:"updated_at"`
-	Size          int64      `json:"size"`
-	Thumbnail     string     `json:"thumbnail"`
-	Url           string     `json:"url"`
-}
 
 func (driver AliDrive) FormatFile(file *AliFile) *model.File {
 	f := &model.File{
@@ -51,17 +24,7 @@ func (driver AliDrive) FormatFile(file *AliFile) *model.File {
 		Driver:    driver.Config().Name,
 		Url:       file.Url,
 	}
-	if file.Type == "folder" {
-		f.Type = conf.FOLDER
-	} else {
-		f.Type = utils.GetFileType(file.FileExtension)
-	}
-	if file.Category == "video" {
-		f.Type = conf.VIDEO
-	}
-	if file.Category == "image" {
-		f.Type = conf.IMAGE
-	}
+	f.Type = file.GetType()
 	return f
 }
 
@@ -190,7 +153,7 @@ func (driver AliDrive) rename(fileId, name string, account *model.Account) error
 	return fmt.Errorf("%+v", resp)
 }
 
-func (driver AliDrive) batch(srcId, dstId string, account *model.Account) error {
+func (driver AliDrive) batch(srcId, dstId string, url string, account *model.Account) error {
 	var e AliRespError
 	res, err := aliClient.R().SetError(&e).
 		SetHeader("authorization", "Bearer\t"+account.AccessToken).
@@ -208,6 +171,7 @@ func (driver AliDrive) batch(srcId, dstId string, account *model.Account) error 
 						"to_drive_id":       account.DriveId,
 						"to_parent_file_id": dstId,
 					},
+					"url": url,
 				},
 			},
 			"resource": "file",
@@ -222,12 +186,13 @@ func (driver AliDrive) batch(srcId, dstId string, account *model.Account) error 
 				return err
 			} else {
 				_ = model.SaveAccount(account)
-				return driver.batch(srcId, dstId, account)
+				return driver.batch(srcId, dstId, url, account)
 			}
 		}
 		return fmt.Errorf("%s", e.Message)
 	}
-	if strings.Contains(res.String(), `"status":200`) {
+	status := jsoniter.Get(res.Body(), "responses", 0, "status").ToInt()
+	if status < 400 && status >= 100 {
 		return nil
 	}
 	return errors.New(res.String())
@@ -236,6 +201,7 @@ func (driver AliDrive) batch(srcId, dstId string, account *model.Account) error 
 func init() {
 	base.RegisterDriver(&AliDrive{})
 	aliClient.
+		SetTimeout(base.DefaultTimeout).
 		SetRetryCount(3).
 		SetHeader("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36").
 		SetHeader("content-type", "application/json").

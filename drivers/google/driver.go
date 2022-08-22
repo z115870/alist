@@ -6,7 +6,6 @@ import (
 	"github.com/Xhofe/alist/drivers/base"
 	"github.com/Xhofe/alist/model"
 	"github.com/Xhofe/alist/utils"
-	"github.com/gin-gonic/gin"
 	log "github.com/sirupsen/logrus"
 	"io/ioutil"
 	"path/filepath"
@@ -30,12 +29,14 @@ func (driver GoogleDrive) Items() []base.Item {
 			Label:    "client id",
 			Type:     base.TypeString,
 			Required: true,
+			Default:  "202264815644.apps.googleusercontent.com",
 		},
 		{
 			Name:     "client_secret",
 			Label:    "client secret",
 			Type:     base.TypeString,
 			Required: true,
+			Default:  "X4Z3ca8xfWDb1Voo-F9a7ZxJ",
 		},
 		{
 			Name:     "refresh_token",
@@ -178,9 +179,9 @@ func (driver GoogleDrive) Path(path string, account *model.Account) (*model.File
 	return nil, files, nil
 }
 
-func (driver GoogleDrive) Proxy(c *gin.Context, account *model.Account) {
-	c.Request.Header.Add("Authorization", "Bearer "+account.AccessToken)
-}
+//func (driver GoogleDrive) Proxy(r *http.Request, account *model.Account) {
+//	r.Header.Add("Authorization", "Bearer "+account.AccessToken)
+//}
 
 func (driver GoogleDrive) Preview(path string, account *model.Account) (interface{}, error) {
 	return nil, base.ErrNotSupport

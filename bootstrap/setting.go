@@ -1,11 +1,13 @@
 package bootstrap
 
 import (
+	"strings"
+
 	"github.com/Xhofe/alist/conf"
 	"github.com/Xhofe/alist/model"
+	"github.com/Xhofe/alist/utils"
 	log "github.com/sirupsen/logrus"
 	"gorm.io/gorm"
-	"strings"
 )
 
 func InitSettings() {
@@ -27,7 +29,7 @@ func InitSettings() {
 		},
 		{
 			Key:         "password",
-			Value:       "alist",
+			Value:       utils.RandomStr(8),
 			Description: "password",
 			Type:        "string",
 			Access:      model.PRIVATE,
@@ -35,7 +37,7 @@ func InitSettings() {
 		},
 		{
 			Key:         "logo",
-			Value:       "https://store.heytapimage.com/cdo-portal/feedback/202112/05/1542f45f86b8609495b69c5380753135.png",
+			Value:       "https://cdn.jsdelivr.net/gh/alist-org/logo@main/can_circle.svg",
 			Description: "logo",
 			Type:        "string",
 			Access:      model.PUBLIC,
@@ -43,7 +45,7 @@ func InitSettings() {
 		},
 		{
 			Key:         "favicon",
-			Value:       "https://store.heytapimage.com/cdo-portal/feedback/202112/05/1542f45f86b8609495b69c5380753135.png",
+			Value:       "https://cdn.jsdelivr.net/gh/alist-org/logo@main/logo.svg",
 			Description: "favicon",
 			Type:        "string",
 			Access:      model.PUBLIC,
@@ -58,6 +60,14 @@ func InitSettings() {
 			Group:       model.FRONT,
 		},
 		{
+			Key:         "announcement",
+			Value:       "This is a test announcement.",
+			Description: "announcement message (support markdown)",
+			Type:        "text",
+			Access:      model.PUBLIC,
+			Group:       model.FRONT,
+		},
+		{
 			Key:         "text types",
 			Value:       strings.Join(conf.TextTypes, ","),
 			Type:        "string",
@@ -65,15 +75,37 @@ func InitSettings() {
 			Group:       model.FRONT,
 		},
 		{
-			Key:         "hide readme file",
-			Value:       "true",
-			Type:        "bool",
-			Description: "hide readme file? ",
+			Key:         "audio types",
+			Value:       strings.Join(conf.AudioTypes, ","),
+			Type:        "string",
+			Description: "audio type extensions",
+			Group:       model.FRONT,
+		},
+		{
+			Key:         "video types",
+			Value:       strings.Join(conf.VideoTypes, ","),
+			Type:        "string",
+			Description: "video type extensions",
+			Group:       model.FRONT,
+		},
+		{
+			Key:         "d_proxy types",
+			Value:       strings.Join(conf.DProxyTypes, ","),
+			Type:        "string",
+			Description: "/d but proxy",
+			Access:      model.PRIVATE,
+			Group:       model.BACK,
+		},
+		{
+			Key:         "hide files",
+			Value:       "/\\/README.md/i",
+			Type:        "text",
+			Description: "hide files, support RegExp, one per line",
 			Group:       model.FRONT,
 		},
 		{
 			Key:         "music cover",
-			Value:       "https://store.heytapimage.com/cdo-portal/feedback/202110/30/d43c41c5d257c9bc36366e310374fb19.png",
+			Value:       "https://cdn.jsdelivr.net/gh/alist-org/logo@main/circle_center.svg",
 			Description: "music cover image",
 			Type:        "string",
 			Access:      model.PUBLIC,
@@ -87,11 +119,18 @@ func InitSettings() {
 			Group:       model.FRONT,
 		},
 		{
-			Key:         "home readme url",
-			Description: "when have multiple, the readme file to show",
+			Key:         "global readme url",
+			Description: "Default display when directory has no readme",
 			Type:        "string",
 			Access:      model.PUBLIC,
 			Group:       model.FRONT,
+		},
+		{
+			Key:    "pdf viewer url",
+			Type:   "string",
+			Value:  "https://alist-org.github.io/pdf.js/web/viewer.html?file=$url",
+			Access: model.PUBLIC,
+			Group:  model.FRONT,
 		},
 		{
 			Key:    "autoplay video",
@@ -157,7 +196,7 @@ func InitSettings() {
 		},
 		{
 			Key:         "WebDAV username",
-			Value:       "alist_admin",
+			Value:       "admin",
 			Description: "WebDAV username",
 			Type:        "string",
 			Access:      model.PRIVATE,
@@ -165,7 +204,7 @@ func InitSettings() {
 		},
 		{
 			Key:         "WebDAV password",
-			Value:       "alist_admin",
+			Value:       utils.RandomStr(8),
 			Description: "WebDAV password",
 			Type:        "string",
 			Access:      model.PRIVATE,
@@ -189,7 +228,7 @@ func InitSettings() {
 		},
 		{
 			Key:         "Visitor WebDAV username",
-			Value:       "alist_visitor",
+			Value:       "guest",
 			Description: "Visitor WebDAV username",
 			Type:        "string",
 			Access:      model.PRIVATE,
@@ -197,7 +236,7 @@ func InitSettings() {
 		},
 		{
 			Key:         "Visitor WebDAV password",
-			Value:       "alist_visitor",
+			Value:       utils.RandomStr(8),
 			Description: "Visitor WebDAV password",
 			Type:        "string",
 			Access:      model.PRIVATE,
@@ -219,6 +258,94 @@ func InitSettings() {
 			Access: model.PUBLIC,
 			Group:  model.FRONT,
 		},
+		{
+			Key:         "ocr api",
+			Value:       "https://api.nn.ci/ocr/file/json",
+			Description: "Used to identify verification codes",
+			Type:        "string",
+			Access:      model.PRIVATE,
+			Group:       model.BACK,
+		},
+		{
+			Key:         "enable search",
+			Value:       "false",
+			Type:        "bool",
+			Access:      model.PUBLIC,
+			Group:       model.BACK,
+			Description: "Experimental function, not recommended as it's still under development",
+		},
+		{
+			Key:         "Aria2 RPC url",
+			Value:       "http://localhost:6800/jsonrpc",
+			Description: "Aria2 RPC url, e.g. 'http://aria2.example.com:6800/jsonrpc'",
+			Type:        "string",
+			Access:      model.PRIVATE,
+			Group:       model.BACK,
+		},
+		{
+			Key:         "Aria2 RPC secret",
+			Value:       "",
+			Description: "Aria2 RPC secret, e.g. '123456'",
+			Type:        "string",
+			Access:      model.PRIVATE,
+			Group:       model.BACK,
+		},
+		{
+			Key:         "Enable Casdoor",
+			Value:       "false",
+			Description: "Enable Casdoor login, you need to restart alist after modification",
+			Type:        "bool",
+			Access:      model.PRIVATE,
+			Group:       model.BACK,
+		},
+		{
+			Key:         "Casdoor Organization name",
+			Value:       "",
+			Description: "Casdoor Organization name",
+			Type:        "string",
+			Access:      model.PRIVATE,
+			Group:       model.BACK,
+		},
+		{
+			Key:         "Casdoor Application name",
+			Value:       "",
+			Description: "Casdoor Application name",
+			Type:        "string",
+			Access:      model.PRIVATE,
+			Group:       model.BACK,
+		},
+		{
+			Key:         "Casdoor Endpoint",
+			Value:       "",
+			Description: "Casdoor Endpoint, e.g. 'http://localhost:8000'",
+			Type:        "string",
+			Access:      model.PRIVATE,
+			Group:       model.BACK,
+		},
+		{
+			Key:         "Casdoor Client id",
+			Value:       "",
+			Description: "Casdoor Client id",
+			Type:        "string",
+			Access:      model.PRIVATE,
+			Group:       model.BACK,
+		},
+		{
+			Key:         "Casdoor Client secret",
+			Value:       "",
+			Description: "Casdoor Client secret",
+			Type:        "string",
+			Access:      model.PRIVATE,
+			Group:       model.BACK,
+		},
+		{
+			Key:         "Casdoor Certificate",
+			Value:       "",
+			Description: "Casdoor Certificate",
+			Type:        "text",
+			Access:      model.PRIVATE,
+			Group:       model.BACK,
+		},
 	}
 	for i, _ := range settings {
 		v := settings[i]
@@ -227,6 +354,9 @@ func InitSettings() {
 		if err != nil {
 			if err == gorm.ErrRecordNotFound {
 				err = model.SaveSetting(v)
+				if v.Key == "password" {
+					log.Infof("Initial password: %s", conf.C.Sprintf(v.Value))
+				}
 				if err != nil {
 					log.Fatalf("failed write setting: %s", err.Error())
 				}
@@ -240,6 +370,9 @@ func InitSettings() {
 			err = model.SaveSetting(v)
 			if err != nil {
 				log.Fatalf("failed write setting: %s", err.Error())
+			}
+			if v.Key == "password" {
+				log.Infof("Your password: %s", conf.C.Sprintf(v.Value))
 			}
 		}
 	}

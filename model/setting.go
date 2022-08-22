@@ -50,7 +50,7 @@ func SaveSetting(item SettingItem) error {
 
 func GetSettingsPublic() ([]SettingItem, error) {
 	var items []SettingItem
-	if err := conf.DB.Where("`access` <> ?", 1).Find(&items).Error; err != nil {
+	if err := conf.DB.Where(fmt.Sprintf("%s <> ?", columnName("access")), 1).Find(&items).Error; err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -58,7 +58,7 @@ func GetSettingsPublic() ([]SettingItem, error) {
 
 func GetSettingsByGroup(group int) ([]SettingItem, error) {
 	var items []SettingItem
-	if err := conf.DB.Where("`group` = ?", group).Find(&items).Error; err != nil {
+	if err := conf.DB.Where(fmt.Sprintf("%s = ?", columnName("group")), group).Find(&items).Error; err != nil {
 		return nil, err
 	}
 	items = append([]SettingItem{Version}, items...)
@@ -82,7 +82,7 @@ func DeleteSetting(key string) error {
 
 func GetSettingByKey(key string) (*SettingItem, error) {
 	var items SettingItem
-	if err := conf.DB.Where("`key` = ?", key).First(&items).Error; err != nil {
+	if err := conf.DB.Where(fmt.Sprintf("%s = ?", columnName("key")), key).First(&items).Error; err != nil {
 		return nil, err
 	}
 	return &items, nil
@@ -93,11 +93,23 @@ func LoadSettings() {
 	if err == nil {
 		conf.TextTypes = strings.Split(textTypes.Value, ",")
 	}
+	audioTypes, err := GetSettingByKey("audio types")
+	if err == nil {
+		conf.AudioTypes = strings.Split(audioTypes.Value, ",")
+	}
+	videoTypes, err := GetSettingByKey("video types")
+	if err == nil {
+		conf.VideoTypes = strings.Split(videoTypes.Value, ",")
+	}
+	dProxyTypes, err := GetSettingByKey("d_proxy types")
+	if err == nil {
+		conf.DProxyTypes = strings.Split(dProxyTypes.Value, ",")
+	}
 	// html
 	favicon, err := GetSettingByKey("favicon")
 	if err == nil {
 		//conf.Favicon = favicon.Value
-		conf.ManageHtml = strings.Replace(conf.RawIndexHtml, "https://store.heytapimage.com/cdo-portal/feedback/202110/30/d43c41c5d257c9bc36366e310374fb19.png", favicon.Value, 1)
+		conf.ManageHtml = strings.Replace(conf.RawIndexHtml, "https://cdn.jsdelivr.net/gh/alist-org/logo@main/logo.svg", favicon.Value, 1)
 	}
 	title, err := GetSettingByKey("title")
 	if err == nil {
@@ -114,7 +126,11 @@ func LoadSettings() {
 	// token
 	adminPassword, err := GetSettingByKey("password")
 	if err == nil {
-		conf.Token = utils.GetMD5Encode(fmt.Sprintf("https://github.com/Xhofe/alist-%s", adminPassword.Value))
+		if adminPassword.Value != "" {
+			conf.Token = utils.GetMD5Encode(fmt.Sprintf("https://github.com/Xhofe/alist-%s", adminPassword.Value))
+		} else {
+			conf.Token = ""
+		}
 	}
 	// load settings
 	for _, key := range conf.LoadSettings {

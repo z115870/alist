@@ -1,7 +1,6 @@
 package mediatrack
 
 import (
-	"bytes"
 	"crypto/md5"
 	"encoding/hex"
 	"fmt"
@@ -13,11 +12,12 @@ import (
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
-	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	jsoniter "github.com/json-iterator/go"
 	log "github.com/sirupsen/logrus"
 	"io"
+	"io/ioutil"
+	"os"
 	"path/filepath"
 )
 
@@ -45,11 +45,12 @@ func (driver MediaTrack) Items() []base.Item {
 			Required: true,
 		},
 		{
-			Name:     "order_by",
-			Label:    "order_by",
-			Type:     base.TypeSelect,
-			Values:   "updated_at,title,size",
-			Required: true,
+			Name:        "order_by",
+			Label:       "order_by",
+			Type:        base.TypeSelect,
+			Values:      "updated_at,title,size",
+			Required:    true,
+			Description: "title",
 		},
 		{
 			Name:     "order_direction",
@@ -57,6 +58,7 @@ func (driver MediaTrack) Items() []base.Item {
 			Type:     base.TypeSelect,
 			Values:   "true,false",
 			Required: true,
+			Default:  "false",
 		},
 	}
 }
@@ -147,19 +149,15 @@ func (driver MediaTrack) Path(path string, account *model.Account) (*model.File,
 	return nil, files, nil
 }
 
-func (driver MediaTrack) Proxy(c *gin.Context, account *model.Account) {
-
-}
+//func (driver MediaTrack) Proxy(r *http.Request, account *model.Account) {
+//
+//}
 
 func (driver MediaTrack) Preview(path string, account *model.Account) (interface{}, error) {
 	return nil, base.ErrNotImplement
 }
 
 func (driver MediaTrack) MakeDir(path string, account *model.Account) error {
-	_, err := driver.File(path, account)
-	if err != base.ErrPathNotFound {
-		return nil
-	}
 	parentFile, err := driver.File(utils.Dir(path), account)
 	if err != nil {
 		return err
@@ -265,21 +263,39 @@ func (driver MediaTrack) Upload(file *model.FileStream, account *model.Account) 
 	if err != nil {
 		return err
 	}
-	var buf bytes.Buffer
-	read := io.TeeReader(file, &buf)
+	tempFile, err := ioutil.TempFile(conf.Conf.TempDir, "file-*")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = tempFile.Close()
+		_ = os.Remove(tempFile.Name())
+	}()
+	_, err = io.Copy(tempFile, file)
+	if err != nil {
+		return err
+	}
+	_, err = tempFile.Seek(0, io.SeekStart)
+	if err != nil {
+		return err
+	}
 	uploader := s3manager.NewUploader(s)
 	input := &s3manager.UploadInput{
 		Bucket: &resp.Data.Bucket,
 		Key:    &resp.Data.Object,
-		Body:   read,
+		Body:   tempFile,
 	}
 	_, err = uploader.Upload(input)
 	if err != nil {
 		return err
 	}
 	url := fmt.Sprintf("https://jayce.api.mediatrack.cn/v3/assets/%s/children", parentFile.Id)
+	_, err = tempFile.Seek(0, io.SeekStart)
+	if err != nil {
+		return err
+	}
 	h := md5.New()
-	_, err = io.Copy(h, &buf)
+	_, err = io.Copy(h, tempFile)
 	if err != nil {
 		return err
 	}

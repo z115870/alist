@@ -1,7 +1,6 @@
 package server
 
 import (
-	"github.com/Xhofe/alist/server/common"
 	"github.com/Xhofe/alist/server/controllers"
 	"github.com/Xhofe/alist/server/controllers/file"
 	"github.com/Xhofe/alist/server/middlewares"
@@ -15,6 +14,8 @@ func InitApiRouter(r *gin.Engine) {
 	Cors(r)
 	r.GET("/d/*path", middlewares.DownCheck, controllers.Down)
 	r.GET("/p/*path", middlewares.DownCheck, controllers.Proxy)
+	r.GET("/favicon.ico", controllers.Favicon)
+	r.GET("/i/:data/ipa.plist", controllers.Plist)
 
 	api := r.Group("/api")
 	public := api.Group("/public")
@@ -22,6 +23,8 @@ func InitApiRouter(r *gin.Engine) {
 		path := public.Group("", middlewares.PathCheck, middlewares.CheckAccount)
 		path.POST("/path", controllers.Path)
 		path.POST("/preview", controllers.Preview)
+
+		public.POST("/search", controllers.Search)
 
 		//path.POST("/link",middlewares.Auth, controllers.Link)
 		public.POST("/upload", file.UploadFiles)
@@ -31,8 +34,11 @@ func InitApiRouter(r *gin.Engine) {
 
 	admin := api.Group("/admin")
 	{
+		admin.GET("/verify", controllers.Verify)
+		admin.GET("/get_redirect_url", controllers.GetRedirectUrl)
+		admin.POST("/oauth", controllers.OAuth)
+
 		admin.Use(middlewares.Auth)
-		admin.GET("/login", common.Login)
 		admin.GET("/settings", controllers.GetSettings)
 		admin.POST("/settings", controllers.SaveSettings)
 		admin.DELETE("/setting", controllers.DeleteSetting)
@@ -51,6 +57,12 @@ func InitApiRouter(r *gin.Engine) {
 
 		admin.POST("/link", controllers.Link)
 		admin.DELETE("/files", file.DeleteFiles)
+		admin.POST("/mkdir", file.Mkdir)
+		admin.POST("/rename", file.Rename)
+		admin.POST("/move", file.Move)
+		admin.POST("/copy", file.Copy)
+		admin.POST("/folder", file.Folder)
+		admin.POST("/refresh", file.RefreshFolder)
 	}
 	WebDav(r)
 	Static(r)

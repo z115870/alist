@@ -1,6 +1,7 @@
 package s3
 
 import (
+	"bytes"
 	"fmt"
 	"github.com/Xhofe/alist/conf"
 	"github.com/Xhofe/alist/drivers/base"
@@ -8,8 +9,8 @@ import (
 	"github.com/Xhofe/alist/utils"
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
-	"github.com/gin-gonic/gin"
 	log "github.com/sirupsen/logrus"
+	"io/ioutil"
 	"net/url"
 	"path/filepath"
 	"time"
@@ -77,8 +78,21 @@ func (driver S3) Items() []base.Item {
 		{
 			Name:        "zone",
 			Label:       "placeholder filename",
-			Type:        base.TypeNumber,
+			Type:        base.TypeString,
 			Description: "default empty string",
+			Default:     defaultPlaceholderName,
+		},
+		{
+			Name:  "bool_1",
+			Label: "S3ForcePathStyle",
+			Type:  base.TypeBool,
+		},
+		{
+			Name:    "internal_type",
+			Label:   "ListObject Version",
+			Type:    base.TypeSelect,
+			Values:  "v1,v2",
+			Default: "v1",
 		},
 	}
 }
@@ -133,7 +147,11 @@ func (driver S3) Files(path string, account *model.Account) ([]model.File, error
 	if err == nil {
 		files, _ = cache.([]model.File)
 	} else {
-		files, err = driver.List(path, account)
+		if account.InternalType == "v2" {
+			files, err = driver.ListV2(path, account)
+		} else {
+			files, err = driver.List(path, account)
+		}
 		if err == nil && len(files) > 0 {
 			_ = base.SetCache(path, files, account)
 		}
@@ -142,7 +160,7 @@ func (driver S3) Files(path string, account *model.Account) ([]model.File, error
 }
 
 func (driver S3) Link(args base.Args, account *model.Account) (*base.Link, error) {
-	client, err := driver.GetClient(account)
+	client, err := driver.GetClient(account, true)
 	if err != nil {
 		return nil, err
 	}
@@ -189,17 +207,28 @@ func (driver S3) Path(path string, account *model.Account) (*model.File, []model
 	return nil, files, nil
 }
 
-func (driver S3) Proxy(c *gin.Context, account *model.Account) {
-
-}
+//func (driver S3) Proxy(r *http.Request, account *model.Account) {
+//
+//}
 
 func (driver S3) Preview(path string, account *model.Account) (interface{}, error) {
 	return nil, base.ErrNotSupport
 }
 
 func (driver S3) MakeDir(path string, account *model.Account) error {
-	// not support, default as success
-	return nil
+	// not support, generate a placeholder file
+	_, err := driver.File(path, account)
+	// exist
+	if err != base.ErrPathNotFound {
+		return nil
+	}
+	return driver.Upload(&model.FileStream{
+		File:       ioutil.NopCloser(bytes.NewReader([]byte{})),
+		Size:       0,
+		ParentPath: path,
+		Name:       getPlaceholderName(account.Zone),
+		MIMEType:   "application/octet-stream",
+	}, account)
 }
 
 func (driver S3) Move(src string, dst string, account *model.Account) error {
@@ -215,7 +244,7 @@ func (driver S3) Rename(src string, dst string, account *model.Account) error {
 }
 
 func (driver S3) Copy(src string, dst string, account *model.Account) error {
-	client, err := driver.GetClient(account)
+	client, err := driver.GetClient(account, false)
 	if err != nil {
 		return err
 	}
@@ -235,7 +264,7 @@ func (driver S3) Copy(src string, dst string, account *model.Account) error {
 }
 
 func (driver S3) Delete(path string, account *model.Account) error {
-	client, err := driver.GetClient(account)
+	client, err := driver.GetClient(account, false)
 	if err != nil {
 		return err
 	}
@@ -262,6 +291,7 @@ func (driver S3) Upload(file *model.FileStream, account *model.Account) error {
 	}
 	uploader := s3manager.NewUploader(s)
 	key := driver.GetKey(utils.Join(file.ParentPath, file.GetFileName()), account, false)
+	log.Debugln("key:", key)
 	input := &s3manager.UploadInput{
 		Bucket: &account.Bucket,
 		Key:    &key,

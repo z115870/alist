@@ -50,8 +50,8 @@ func InitModel() {
 		}
 	case "mysql":
 		{
-			dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=True&loc=Local",
-				databaseConfig.User, databaseConfig.Password, databaseConfig.Host, databaseConfig.Port, databaseConfig.Name)
+			dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=True&loc=Local&tls=%s",
+				databaseConfig.User, databaseConfig.Password, databaseConfig.Host, databaseConfig.Port, databaseConfig.Name, databaseConfig.SslMode)
 			db, err := gorm.Open(mysql.Open(dsn), gormConfig)
 			if err != nil {
 				log.Fatalf("failed to connect database:%s", err.Error())
@@ -60,14 +60,13 @@ func InitModel() {
 		}
 	case "postgres":
 		{
-			dsn := fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%d sslmode=disable TimeZone=Asia/Shanghai",
-				databaseConfig.Host, databaseConfig.User, databaseConfig.Password, databaseConfig.Name, databaseConfig.Port)
+			dsn := fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%d sslmode=%s TimeZone=Asia/Shanghai",
+				databaseConfig.Host, databaseConfig.User, databaseConfig.Password, databaseConfig.Name, databaseConfig.Port, databaseConfig.SslMode)
 			db, err := gorm.Open(postgres.Open(dsn), gormConfig)
 			if err != nil {
 				log.Errorf("failed to connect database:%s", err.Error())
 			}
 			conf.DB = db
-
 		}
 	default:
 		log.Fatalf("not supported database type: %s", databaseConfig.Type)
@@ -75,11 +74,11 @@ func InitModel() {
 	log.Infof("auto migrate model...")
 	if databaseConfig.Type == "mysql" {
 		err = conf.DB.Set("gorm:table_options", "ENGINE=InnoDB CHARSET=utf8mb4").
-			AutoMigrate(&model.SettingItem{}, &model.Account{}, &model.Meta{})
+			AutoMigrate(&model.SettingItem{}, &model.Account{}, &model.Meta{}, &model.SearchFile{})
 	} else {
-		err = conf.DB.AutoMigrate(&model.SettingItem{}, &model.Account{}, &model.Meta{})
+		err = conf.DB.AutoMigrate(&model.SettingItem{}, &model.Account{}, &model.Meta{}, &model.SearchFile{})
 	}
 	if err != nil {
-		log.Fatalf("failed to auto migrate")
+		log.Fatalf("failed to auto migrate: %s", err.Error())
 	}
 }

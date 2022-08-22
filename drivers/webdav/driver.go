@@ -3,9 +3,10 @@ package webdav
 import (
 	"github.com/Xhofe/alist/conf"
 	"github.com/Xhofe/alist/drivers/base"
+	"github.com/Xhofe/alist/drivers/webdav/odrvcookie"
 	"github.com/Xhofe/alist/model"
 	"github.com/Xhofe/alist/utils"
-	"github.com/gin-gonic/gin"
+	"net/http"
 	"path/filepath"
 )
 
@@ -41,6 +42,15 @@ func (driver WebDav) Items() []base.Item {
 			Type:     base.TypeString,
 			Required: true,
 		},
+		{
+			Name:        "internal_type",
+			Label:       "vendor",
+			Type:        base.TypeSelect,
+			Required:    true,
+			Default:     "other",
+			Values:      "sharepoint,other",
+			Description: "webdav vendor",
+		},
 	}
 }
 
@@ -48,9 +58,17 @@ func (driver WebDav) Save(account *model.Account, old *model.Account) error {
 	if account == nil {
 		return nil
 	}
-	account.Status = "work"
+	var err error
+	if isSharePoint(account) {
+		_, err = odrvcookie.GetCookie(account.Username, account.Password, account.SiteUrl)
+	}
+	if err != nil {
+		account.Status = err.Error()
+	} else {
+		account.Status = "work"
+	}
 	_ = model.SaveAccount(account)
-	return nil
+	return err
 }
 
 func (driver WebDav) File(path string, account *model.Account) (*model.File, error) {
@@ -115,11 +133,27 @@ func (driver WebDav) Files(path string, account *model.Account) ([]model.File, e
 func (driver WebDav) Link(args base.Args, account *model.Account) (*base.Link, error) {
 	path := args.Path
 	c := driver.NewClient(account)
-	reader, err := c.ReadStream(driver.WebDavPath(path))
+	callback := func(r *http.Request) {
+		if args.Header.Get("Range") != "" {
+			r.Header.Set("Range", args.Header.Get("Range"))
+		}
+		if args.Header.Get("If-Range") != "" {
+			r.Header.Set("If-Range", args.Header.Get("If-Range"))
+		}
+	}
+	reader, header, err := c.ReadStream(driver.WebDavPath(path), callback)
 	if err != nil {
 		return nil, err
 	}
-	return &base.Link{Data: reader}, nil
+	link := &base.Link{Data: reader}
+	if header.Get("Content-Range") != "" {
+		link.Status = 206
+		link.Header = http.Header{
+			"Content-Range":  header.Values("Content-Range"),
+			"Content-Length": header.Values("Content-Length"),
+		}
+	}
+	return link, nil
 }
 
 func (driver WebDav) Path(path string, account *model.Account) (*model.File, []model.File, error) {
@@ -137,9 +171,9 @@ func (driver WebDav) Path(path string, account *model.Account) (*model.File, []m
 	return nil, files, nil
 }
 
-func (driver WebDav) Proxy(c *gin.Context, account *model.Account) {
-
-}
+//func (driver WebDav) Proxy(r *http.Request, account *model.Account) {
+//
+//}
 
 func (driver WebDav) Preview(path string, account *model.Account) (interface{}, error) {
 	return nil, base.ErrNotSupport
@@ -179,7 +213,11 @@ func (driver WebDav) Upload(file *model.FileStream, account *model.Account) erro
 	}
 	c := driver.NewClient(account)
 	path := utils.Join(file.ParentPath, file.Name)
-	err := c.WriteStream(driver.WebDavPath(path), file, 0644)
+	callback := func(r *http.Request) {
+		r.Header.Set("Content-Type", file.GetMIMEType())
+		r.ContentLength = int64(file.GetSize())
+	}
+	err := c.WriteStream(driver.WebDavPath(path), file, 0644, callback)
 	return err
 }
 

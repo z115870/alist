@@ -1,23 +1,25 @@
 package _89
 
 import (
-	"errors"
 	"fmt"
+	"net/http"
+	"path/filepath"
+	"strings"
+
 	"github.com/Xhofe/alist/conf"
 	"github.com/Xhofe/alist/drivers/base"
 	"github.com/Xhofe/alist/model"
 	"github.com/Xhofe/alist/utils"
-	"github.com/gin-gonic/gin"
-	jsoniter "github.com/json-iterator/go"
+	"github.com/go-resty/resty/v2"
 	log "github.com/sirupsen/logrus"
-	"path/filepath"
 )
 
 type Cloud189 struct{}
 
 func (driver Cloud189) Config() base.DriverConfig {
 	return base.DriverConfig{
-		Name: "189Cloud",
+		Name:      "189Cloud",
+		LocalSort: true,
 	}
 }
 
@@ -55,20 +57,20 @@ func (driver Cloud189) Items() []base.Item {
 		//	Label: "family id",
 		//	Type:  base.TypeString,
 		//},
-		{
-			Name:     "order_by",
-			Label:    "order_by",
-			Type:     base.TypeSelect,
-			Values:   "name,size,lastOpTime,createdDate",
-			Required: true,
-		},
-		{
-			Name:     "order_direction",
-			Label:    "desc",
-			Type:     base.TypeSelect,
-			Values:   "true,false",
-			Required: true,
-		},
+		//{
+		//	Name:     "order_by",
+		//	Label:    "order_by",
+		//	Type:     base.TypeSelect,
+		//	Values:   "name,size,lastOpTime,createdDate",
+		//	Required: true,
+		//},
+		//{
+		//	Name:     "order_direction",
+		//	Label:    "desc",
+		//	Type:     base.TypeSelect,
+		//	Values:   "true,false",
+		//	Required: true,
+		//},
 	}
 }
 
@@ -154,14 +156,15 @@ func (driver Cloud189) Link(args base.Args, account *model.Account) (*base.Link,
 	if file.Type == conf.FOLDER {
 		return nil, base.ErrNotFile
 	}
-	var resp Cloud189Down
-	u := "https://cloud.189.cn/api/open/file/getFileDownloadUrl.action"
+	var resp DownResp
+	u := "https://cloud.189.cn/api/portal/getFileInfo.action"
 	body, err := driver.Request(u, base.Get, map[string]string{
 		"fileId": file.Id,
 	}, nil, nil, account)
 	if err != nil {
 		return nil, err
 	}
+	log.Debugln(string(body))
 	err = utils.Json.Unmarshal(body, &resp)
 	if err != nil {
 		return nil, err
@@ -169,16 +172,39 @@ func (driver Cloud189) Link(args base.Args, account *model.Account) (*base.Link,
 	if resp.ResCode != 0 {
 		return nil, fmt.Errorf(resp.ResMessage)
 	}
-	res, err := base.NoRedirectClient.R().Get(resp.FileDownloadUrl)
+	client, err := driver.getClient(account)
 	if err != nil {
 		return nil, err
 	}
-	link := base.Link{}
+	client = resty.NewWithClient(client.GetClient()).SetRedirectPolicy(
+		resty.RedirectPolicyFunc(func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		}))
+	res, err := client.R().SetHeader("User-Agent", base.UserAgent).Get("https:" + resp.FileDownloadUrl)
+	if err != nil {
+		return nil, err
+	}
+	log.Debugln(res.Status())
+	log.Debugln(res.String())
+	link := base.Link{
+		Headers: []base.Header{
+			{Name: "User-Agent", Value: base.UserAgent},
+			//{Name: "Authorization", Value: ""},
+		},
+	}
+	log.Debugln("first url:", resp.FileDownloadUrl)
 	if res.StatusCode() == 302 {
 		link.Url = res.Header().Get("location")
+		log.Debugln("second url:", link.Url)
+		_, _ = client.R().Get(link.Url)
+		if res.StatusCode() == 302 {
+			link.Url = res.Header().Get("location")
+		}
+		log.Debugln("third url:", link.Url)
 	} else {
 		link.Url = resp.FileDownloadUrl
 	}
+	link.Url = strings.Replace(link.Url, "http://", "https://", 1)
 	return &link, nil
 }
 
@@ -199,9 +225,9 @@ func (driver Cloud189) Path(path string, account *model.Account) (*model.File, [
 	return nil, files, nil
 }
 
-func (driver Cloud189) Proxy(ctx *gin.Context, account *model.Account) {
-	ctx.Request.Header.Del("Origin")
-}
+//func (driver Cloud189) Proxy(r *http.Request, account *model.Account) {
+//	r.Header.Del("Origin")
+//}
 
 func (driver Cloud189) Preview(path string, account *model.Account) (interface{}, error) {
 	return nil, base.ErrNotSupport
@@ -349,29 +375,8 @@ func (driver Cloud189) Upload(file *model.FileStream, account *model.Account) er
 	if file == nil {
 		return base.ErrEmptyFile
 	}
-	client, ok := client189Map[account.Name]
-	if !ok {
-		return fmt.Errorf("can't find [%s] client", account.Name)
-	}
-	parentFile, err := driver.File(file.ParentPath, account)
-	if err != nil {
-		return err
-	}
-	// api refer to PanIndex
-	res, err := client.R().SetMultipartFormData(map[string]string{
-		"parentId":   parentFile.Id,
-		"sessionKey": account.DriveId,
-		"opertype":   "1",
-		"fname":      file.GetFileName(),
-	}).SetMultipartField("Filedata", file.GetFileName(), file.GetMIMEType(), file).Post("https://hb02.upload.cloud.189.cn/v1/DCIWebUploadAction")
-	if err != nil {
-		return err
-	}
-	if jsoniter.Get(res.Body(), "MD5").ToString() != "" {
-		return nil
-	}
-	log.Debugf(res.String())
-	return errors.New(res.String())
+	return driver.NewUpload(file, account)
+	//return driver.OldUpload(file, account)
 }
 
 var _ base.Driver = (*Cloud189)(nil)

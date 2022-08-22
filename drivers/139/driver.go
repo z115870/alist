@@ -7,7 +7,6 @@ import (
 	"github.com/Xhofe/alist/drivers/base"
 	"github.com/Xhofe/alist/model"
 	"github.com/Xhofe/alist/utils"
-	"github.com/gin-gonic/gin"
 	log "github.com/sirupsen/logrus"
 	"io"
 	"math"
@@ -163,9 +162,9 @@ func (driver Cloud139) Path(path string, account *model.Account) (*model.File, [
 	return nil, files, nil
 }
 
-func (driver Cloud139) Proxy(c *gin.Context, account *model.Account) {
-
-}
+//func (driver Cloud139) Proxy(r *http.Request, account *model.Account) {
+//
+//}
 
 func (driver Cloud139) Preview(path string, account *model.Account) (interface{}, error) {
 	return nil, base.ErrNotSupport
@@ -271,7 +270,7 @@ func (driver Cloud139) Rename(src string, dst string, account *model.Account) er
 				"accountType": 1,
 			},
 		}
-		pathname = "/orchestration/personalCloud/catalog/v1.0/updateContentInfo"
+		pathname = "/orchestration/personalCloud/content/v1.0/updateContentInfo"
 	}
 	_, err = driver.Post(pathname, data, nil, account)
 	return err
@@ -335,7 +334,7 @@ func (driver Cloud139) Delete(path string, account *model.Account) error {
 			"taskInfo": base.Json{
 				"newCatalogID":    "",
 				"contentInfoList": contentInfoList,
-				"catalogInfoList": contentInfoList,
+				"catalogInfoList": catalogInfoList,
 			},
 			"commonAccountInfo": base.Json{
 				"account":     account.Username,
@@ -449,6 +448,7 @@ func (driver Cloud139) Upload(file *model.FileStream, account *model.Account) er
 			return err
 		}
 		log.Debugf("%+v", res)
+		res.Body.Close()
 		start += byteSize
 	}
 	return nil

@@ -2,19 +2,25 @@ package alidrive
 
 import (
 	"bytes"
+	"crypto/sha1"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
+	"io/ioutil"
+	"math"
+	"math/big"
+	"net/http"
+	"os"
+	"path/filepath"
+
 	"github.com/Xhofe/alist/conf"
 	"github.com/Xhofe/alist/drivers/base"
 	"github.com/Xhofe/alist/model"
 	"github.com/Xhofe/alist/utils"
-	"github.com/gin-gonic/gin"
 	"github.com/robfig/cron/v3"
 	log "github.com/sirupsen/logrus"
-	"io"
-	"math"
-	"net/http"
-	"path/filepath"
 )
 
 type AliDrive struct{}
@@ -60,6 +66,11 @@ func (driver AliDrive) Items() []base.Item {
 			Required:    false,
 			Description: ">0 and <=200",
 		},
+		{
+			Name:  "bool_1",
+			Label: "fast upload",
+			Type:  base.TypeBool,
+		},
 	}
 }
 
@@ -88,15 +99,15 @@ func (driver AliDrive) Save(account *model.Account, old *model.Account) error {
 	log.Debugf("user info: %+v", resp)
 	account.DriveId = resp["default_drive_id"].(string)
 	cronId, err := conf.Cron.AddFunc("@every 2h", func() {
-		name := account.Name
-		log.Debugf("ali account name: %s", name)
-		newAccount, ok := model.GetAccount(name)
+		id := account.ID
+		log.Debugf("ali account id: %d", id)
+		newAccount, err := model.GetAccountById(id)
 		log.Debugf("ali account: %+v", newAccount)
-		if !ok {
+		if err != nil {
 			return
 		}
-		err = driver.RefreshToken(&newAccount)
-		_ = model.SaveAccount(&newAccount)
+		err = driver.RefreshToken(newAccount)
+		_ = model.SaveAccount(newAccount)
 	})
 	if err != nil {
 		return err
@@ -191,6 +202,12 @@ func (driver AliDrive) Link(args base.Args, account *model.Account) (*base.Link,
 		return nil, fmt.Errorf("%s", e.Message)
 	}
 	return &base.Link{
+		Headers: []base.Header{
+			{
+				Name:  "Referer",
+				Value: "https://www.aliyundrive.com/",
+			},
+		},
 		Url: resp["url"].(string),
 	}, nil
 }
@@ -212,10 +229,10 @@ func (driver AliDrive) Path(path string, account *model.Account) (*model.File, [
 	return nil, files, nil
 }
 
-func (driver AliDrive) Proxy(c *gin.Context, account *model.Account) {
-	c.Request.Header.Del("Origin")
-	c.Request.Header.Set("Referer", "https://www.aliyundrive.com/")
-}
+//func (driver AliDrive) Proxy(r *http.Request, account *model.Account) {
+//	r.Header.Del("Origin")
+//	r.Header.Set("Referer", "https://www.aliyundrive.com/")
+//}
 
 func (driver AliDrive) Preview(path string, account *model.Account) (interface{}, error) {
 	file, err := driver.GetFile(path, account)
@@ -304,7 +321,7 @@ func (driver AliDrive) Move(src string, dst string, account *model.Account) erro
 	if err != nil {
 		return err
 	}
-	err = driver.batch(srcFile.Id, dstDirFile.Id, account)
+	err = driver.batch(srcFile.Id, dstDirFile.Id, "/file/move", account)
 	return err
 }
 
@@ -319,7 +336,17 @@ func (driver AliDrive) Rename(src string, dst string, account *model.Account) er
 }
 
 func (driver AliDrive) Copy(src string, dst string, account *model.Account) error {
-	return base.ErrNotSupport
+	dstDir, _ := filepath.Split(dst)
+	srcFile, err := driver.File(src, account)
+	if err != nil {
+		return err
+	}
+	dstDirFile, err := driver.File(dstDir, account)
+	if err != nil {
+		return err
+	}
+	err = driver.batch(srcFile.Id, dstDirFile.Id, "/file/copy", account)
+	return err
 }
 
 func (driver AliDrive) Delete(path string, account *model.Account) error {
@@ -349,7 +376,7 @@ func (driver AliDrive) Delete(path string, account *model.Account) error {
 		}
 		return fmt.Errorf("%s", e.Message)
 	}
-	if res.StatusCode() == 204 {
+	if res.StatusCode() < 400 {
 		return nil
 	}
 	return errors.New(res.String())
@@ -361,15 +388,15 @@ type UploadResp struct {
 	PartInfoList []struct {
 		UploadUrl string `json:"upload_url"`
 	} `json:"part_info_list"`
+
+	RapidUpload bool `json:"rapid_upload"`
 }
 
 func (driver AliDrive) Upload(file *model.FileStream, account *model.Account) error {
 	if file == nil {
 		return base.ErrEmptyFile
 	}
-	const DEFAULT uint64 = 10485760
-	var count = int64(math.Ceil(float64(file.GetSize()) / float64(DEFAULT)))
-	var finish uint64 = 0
+
 	parentFile, err := driver.File(file.ParentPath, account)
 	if err != nil {
 		return err
@@ -377,32 +404,51 @@ func (driver AliDrive) Upload(file *model.FileStream, account *model.Account) er
 	if !parentFile.IsDir() {
 		return base.ErrNotFolder
 	}
+
+	const DEFAULT int64 = 10485760
+	var count = int(math.Ceil(float64(file.GetSize()) / float64(DEFAULT)))
+
+	partInfoList := make([]base.Json, 0, count)
+	for i := 1; i <= count; i++ {
+		partInfoList = append(partInfoList, base.Json{"part_number": i})
+	}
+
+	reqBody := base.Json{
+		"check_name_mode": "overwrite",
+		"drive_id":        account.DriveId,
+		"name":            file.GetFileName(),
+		"parent_file_id":  parentFile.Id,
+		"part_info_list":  partInfoList,
+		"size":            file.GetSize(),
+		"type":            "file",
+	}
+
+	if account.Bool1 {
+		buf := bytes.NewBuffer(make([]byte, 0, 1024))
+		io.CopyN(buf, file, 1024)
+		reqBody["pre_hash"] = utils.GetSHA1Encode(buf.String())
+		// 把头部拼接回去
+		file.File = struct {
+			io.Reader
+			io.Closer
+		}{
+			Reader: io.MultiReader(buf, file.File),
+			Closer: file.File,
+		}
+	} else {
+		reqBody["content_hash_name"] = "none"
+		reqBody["proof_version"] = "v1"
+	}
+
 	var resp UploadResp
 	var e AliRespError
-	partInfoList := make([]base.Json, 0)
-	var i int64
-	for i = 0; i < count; i++ {
-		partInfoList = append(partInfoList, base.Json{
-			"part_number": i + 1,
-		})
+	client := aliClient.R().SetResult(&resp).SetError(&e).SetHeader("authorization", "Bearer\t"+account.AccessToken).SetBody(reqBody)
+
+	_, err = client.Post("https://api.aliyundrive.com/adrive/v2/file/createWithFolders")
+	if err != nil {
+		return err
 	}
-	_, err = aliClient.R().SetResult(&resp).SetError(&e).
-		SetHeader("authorization", "Bearer\t"+account.AccessToken).
-		SetBody(base.Json{
-			"check_name_mode": "auto_rename",
-			// content_hash
-			"content_hash_name": "none",
-			"drive_id":          account.DriveId,
-			"name":              file.GetFileName(),
-			"parent_file_id":    parentFile.Id,
-			"part_info_list":    partInfoList,
-			//proof_code
-			"proof_version": "v1",
-			"size":          file.GetSize(),
-			"type":          "file",
-		}).Post("https://api.aliyundrive.com/adrive/v2/file/createWithFolders") // /v2/file/create_with_proof
-	//log.Debugf("%+v\n%+v", resp, e)
-	if e.Code != "" {
+	if e.Code != "" && e.Code != "PreHashMatched" {
 		if e.Code == "AccessTokenInvalid" {
 			err = driver.RefreshToken(account)
 			if err != nil {
@@ -414,26 +460,63 @@ func (driver AliDrive) Upload(file *model.FileStream, account *model.Account) er
 		}
 		return fmt.Errorf("%s", e.Message)
 	}
-	var byteSize uint64
-	for i = 0; i < count; i++ {
-		byteSize = file.GetSize() - finish
-		if DEFAULT < byteSize {
-			byteSize = DEFAULT
-		}
-		log.Debugf("%d,%d", byteSize, finish)
-		byteData := make([]byte, byteSize)
-		n, err := io.ReadFull(file, byteData)
-		//n, err := file.Read(byteData)
-		//byteData, err := io.ReadAll(file)
-		//n := len(byteData)
-		log.Debug(err, n)
+
+	if account.Bool1 && e.Code == "PreHashMatched" {
+		tempFile, err := ioutil.TempFile(conf.Conf.TempDir, "file-*")
 		if err != nil {
 			return err
 		}
 
-		finish += uint64(n)
+		defer func() {
+			_ = tempFile.Close()
+			_ = os.Remove(tempFile.Name())
+		}()
 
-		req, err := http.NewRequest("PUT", resp.PartInfoList[i].UploadUrl, bytes.NewBuffer(byteData))
+		delete(reqBody, "pre_hash")
+		h := sha1.New()
+		if _, err = io.Copy(io.MultiWriter(tempFile, h), file.File); err != nil {
+			return err
+		}
+		reqBody["content_hash"] = hex.EncodeToString(h.Sum(nil))
+		reqBody["content_hash_name"] = "sha1"
+		reqBody["proof_version"] = "v1"
+
+		/*
+			js 隐性转换太坑不知道有没有bug
+			var n = e.access_token，
+			r = new BigNumber('0x'.concat(md5(n).slice(0, 16)))，
+			i = new BigNumber(t.file.size)，
+			o = i ? r.mod(i) : new gt.BigNumber(0);
+			(t.file.slice(o.toNumber(), Math.min(o.plus(8).toNumber(), t.file.size)))
+		*/
+		buf := make([]byte, 8)
+		r, _ := new(big.Int).SetString(utils.GetMD5Encode(account.AccessToken)[:16], 16)
+		i := new(big.Int).SetUint64(file.Size)
+		o := r.Mod(r, i)
+		n, _ := io.NewSectionReader(tempFile, o.Int64(), 8).Read(buf[:8])
+		reqBody["proof_code"] = base64.StdEncoding.EncodeToString(buf[:n])
+
+		_, err = client.Post("https://api.aliyundrive.com/adrive/v2/file/createWithFolders")
+		if err != nil {
+			return err
+		}
+		if e.Code != "" && e.Code != "PreHashMatched" {
+			return fmt.Errorf("%s", e.Message)
+		}
+
+		if resp.RapidUpload {
+			return nil
+		}
+
+		// 秒传失败
+		if _, err = tempFile.Seek(0, io.SeekStart); err != nil {
+			return err
+		}
+		file.File = tempFile
+	}
+
+	for _, partInfo := range resp.PartInfoList {
+		req, err := http.NewRequest("PUT", partInfo.UploadUrl, io.LimitReader(file.File, DEFAULT))
 		if err != nil {
 			return err
 		}
@@ -442,6 +525,7 @@ func (driver AliDrive) Upload(file *model.FileStream, account *model.Account) er
 			return err
 		}
 		log.Debugf("%+v", res)
+		res.Body.Close()
 		//res, err := base.BaseClient.R().
 		//	SetHeader("Content-Type","").
 		//	SetBody(byteData).Put(resp.PartInfoList[i].UploadUrl)
@@ -458,7 +542,10 @@ func (driver AliDrive) Upload(file *model.FileStream, account *model.Account) er
 			"file_id":   resp.FileId,
 			"upload_id": resp.UploadId,
 		}).Post("https://api.aliyundrive.com/v2/file/complete")
-	if e.Code != "" {
+	if err != nil {
+		return err
+	}
+	if e.Code != "" && e.Code != "PreHashMatched" {
 		//if e.Code == "AccessTokenInvalid" {
 		//	err = driver.RefreshToken(account)
 		//	if err != nil {

@@ -3,66 +3,16 @@ package _23
 import (
 	"errors"
 	"fmt"
-	"github.com/Xhofe/alist/conf"
+	"path/filepath"
+	"strconv"
+
 	"github.com/Xhofe/alist/drivers/base"
 	"github.com/Xhofe/alist/model"
 	"github.com/Xhofe/alist/utils"
 	"github.com/go-resty/resty/v2"
 	jsoniter "github.com/json-iterator/go"
 	log "github.com/sirupsen/logrus"
-	"path/filepath"
-	"strconv"
-	"time"
 )
-
-type BaseResp struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
-}
-
-type Pan123TokenResp struct {
-	BaseResp
-	Data struct {
-		Token string `json:"token"`
-	} `json:"data"`
-}
-
-type Pan123File struct {
-	FileName  string     `json:"FileName"`
-	Size      int64      `json:"Size"`
-	UpdateAt  *time.Time `json:"UpdateAt"`
-	FileId    int64      `json:"FileId"`
-	Type      int        `json:"Type"`
-	Etag      string     `json:"Etag"`
-	S3KeyFlag string     `json:"S3KeyFlag"`
-}
-
-type Pan123Files struct {
-	BaseResp
-	Data struct {
-		InfoList []Pan123File `json:"InfoList"`
-		Next     string       `json:"Next"`
-	} `json:"data"`
-}
-
-type Pan123DownResp struct {
-	BaseResp
-	Data struct {
-		DownloadUrl string `json:"DownloadUrl"`
-	} `json:"data"`
-}
-
-type UploadResp struct {
-	BaseResp
-	Data struct {
-		AccessKeyId     string `json:"AccessKeyId"`
-		Bucket          string `json:"Bucket"`
-		Key             string `json:"Key"`
-		SecretAccessKey string `json:"SecretAccessKey"`
-		SessionToken    string `json:"SessionToken"`
-		FileId          int64  `json:"FileId"`
-	} `json:"data"`
-}
 
 func (driver Pan123) Login(account *model.Account) error {
 	url := "https://www.123pan.com/api/user/sign_in"
@@ -90,25 +40,22 @@ func (driver Pan123) Login(account *model.Account) error {
 	return err
 }
 
-func (driver Pan123) FormatFile(file *Pan123File) *model.File {
+func (driver Pan123) FormatFile(file *File) *model.File {
 	f := &model.File{
 		Id:        strconv.FormatInt(file.FileId, 10),
 		Name:      file.FileName,
 		Size:      file.Size,
 		Driver:    driver.Config().Name,
 		UpdatedAt: file.UpdateAt,
+		Thumbnail: file.DownloadUrl,
 	}
-	if file.Type == 1 {
-		f.Type = conf.FOLDER
-	} else {
-		f.Type = utils.GetFileType(filepath.Ext(file.FileName))
-	}
+	f.Type = file.GetType()
 	return f
 }
 
-func (driver Pan123) GetFiles(parentId string, account *model.Account) ([]Pan123File, error) {
+func (driver Pan123) GetFiles(parentId string, account *model.Account) ([]File, error) {
 	next := "0"
-	res := make([]Pan123File, 0)
+	res := make([]File, 0)
 	for next != "-1" {
 		var resp Pan123Files
 		query := map[string]string{
@@ -120,7 +67,7 @@ func (driver Pan123) GetFiles(parentId string, account *model.Account) ([]Pan123
 			"parentFileId":   parentId,
 			"trashed":        "false",
 		}
-		_, err := driver.Request("https://www.123pan.com/api/file/list",
+		_, err := driver.Request("https://www.123pan.com/api/file/list/new",
 			base.Get, nil, query, nil, &resp, false, account)
 		if err != nil {
 			return nil, err
@@ -193,7 +140,7 @@ func (driver Pan123) Request(url string, method int, headers, query map[string]s
 //	return body, nil
 //}
 
-func (driver Pan123) GetFile(path string, account *model.Account) (*Pan123File, error) {
+func (driver Pan123) GetFile(path string, account *model.Account) (*File, error) {
 	dir, name := filepath.Split(path)
 	dir = utils.ParsePath(dir)
 	_, err := driver.Files(dir, account)
@@ -201,14 +148,15 @@ func (driver Pan123) GetFile(path string, account *model.Account) (*Pan123File, 
 		return nil, err
 	}
 	parentFiles_, _ := base.GetCache(dir, account)
-	parentFiles, _ := parentFiles_.([]Pan123File)
+	parentFiles, _ := parentFiles_.([]File)
 	for _, file := range parentFiles {
 		if file.FileName == name {
-			if file.Type != conf.FOLDER {
-				return &file, err
-			} else {
-				return nil, base.ErrNotFile
-			}
+			//if file.Type != conf.FOLDER {
+			//	return &file, err
+			//} else {
+			//	return nil, base.ErrNotFile
+			//}
+			return &file, nil
 		}
 	}
 	return nil, base.ErrPathNotFound

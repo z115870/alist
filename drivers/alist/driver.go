@@ -7,7 +7,6 @@ import (
 	"github.com/Xhofe/alist/drivers/base"
 	"github.com/Xhofe/alist/model"
 	"github.com/Xhofe/alist/utils"
-	"github.com/gin-gonic/gin"
 	"path/filepath"
 	"strings"
 	"time"
@@ -114,7 +113,7 @@ func (driver Alist) Link(args base.Args, account *model.Account) (*base.Link, er
 		flag = "p"
 	}
 	link := base.Link{}
-	link.Url = fmt.Sprintf("%s/%s%s?sign=%s", account.SiteUrl, flag, path, utils.SignWithToken(name, conf.Token))
+	link.Url = fmt.Sprintf("%s/%s%s?sign=%s", account.SiteUrl, flag, utils.Join(utils.ParsePath(account.RootFolder), path), utils.SignWithToken(name, conf.Token))
 	return &link, nil
 }
 
@@ -148,7 +147,7 @@ func (driver Alist) Path(path string, account *model.Account) (*model.File, []mo
 	return nil, resp.Data.Files, nil
 }
 
-func (driver Alist) Proxy(c *gin.Context, account *model.Account) {}
+//func (driver Alist) Proxy(r *http.Request, account *model.Account) {}
 
 func (driver Alist) Preview(path string, account *model.Account) (interface{}, error) {
 	var resp PathResp

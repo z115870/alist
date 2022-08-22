@@ -6,7 +6,6 @@ import (
 	"github.com/Xhofe/alist/drivers/base"
 	"github.com/Xhofe/alist/model"
 	"github.com/Xhofe/alist/utils"
-	"github.com/gin-gonic/gin"
 	log "github.com/sirupsen/logrus"
 	"io"
 	"io/ioutil"
@@ -58,6 +57,9 @@ func (driver Native) Save(account *model.Account, old *model.Account) error {
 }
 
 func (driver Native) File(path string, account *model.Account) (*model.File, error) {
+	if utils.IsContain(strings.Split(path, "/"), "..") {
+		return nil, base.ErrRelativePath
+	}
 	fullPath := filepath.Join(account.RootFolder, path)
 	if !utils.Exists(fullPath) {
 		return nil, base.ErrPathNotFound
@@ -69,7 +71,6 @@ func (driver Native) File(path string, account *model.Account) (*model.File, err
 	time := f.ModTime()
 	file := &model.File{
 		Name:      f.Name(),
-		Size:      f.Size(),
 		UpdatedAt: &time,
 		Driver:    driver.Config().Name,
 	}
@@ -77,11 +78,15 @@ func (driver Native) File(path string, account *model.Account) (*model.File, err
 		file.Type = conf.FOLDER
 	} else {
 		file.Type = utils.GetFileType(filepath.Ext(f.Name()))
+		file.Size = f.Size()
 	}
 	return file, nil
 }
 
 func (driver Native) Files(path string, account *model.Account) ([]model.File, error) {
+	if utils.IsContain(strings.Split(path, "/"), "..") {
+		return nil, base.ErrRelativePath
+	}
 	fullPath := filepath.Join(account.RootFolder, path)
 	if !utils.Exists(fullPath) {
 		return nil, base.ErrPathNotFound
@@ -98,7 +103,6 @@ func (driver Native) Files(path string, account *model.Account) ([]model.File, e
 		time := f.ModTime()
 		file := model.File{
 			Name:      f.Name(),
-			Size:      f.Size(),
 			Type:      0,
 			UpdatedAt: &time,
 			Driver:    driver.Config().Name,
@@ -107,14 +111,22 @@ func (driver Native) Files(path string, account *model.Account) ([]model.File, e
 			file.Type = conf.FOLDER
 		} else {
 			file.Type = utils.GetFileType(filepath.Ext(f.Name()))
+			file.Size = f.Size()
 		}
 		files = append(files, file)
 	}
-	model.SortFiles(files, account)
+	_, err = base.GetCache(path, account)
+	if len(files) != 0 && err != nil {
+		_ = base.SetCache(path, files, account)
+	}
 	return files, nil
 }
 
 func (driver Native) Link(args base.Args, account *model.Account) (*base.Link, error) {
+	_, err := driver.File(args.Path, account)
+	if err != nil {
+		return nil, err
+	}
 	fullPath := filepath.Join(account.RootFolder, args.Path)
 	s, err := os.Stat(fullPath)
 	if err != nil {
@@ -124,7 +136,7 @@ func (driver Native) Link(args base.Args, account *model.Account) (*base.Link, e
 		return nil, base.ErrNotFile
 	}
 	link := base.Link{
-		Url: fullPath,
+		FilePath: fullPath,
 	}
 	return &link, nil
 }
@@ -147,21 +159,27 @@ func (driver Native) Path(path string, account *model.Account) (*model.File, []m
 	return nil, files, nil
 }
 
-func (driver Native) Proxy(c *gin.Context, account *model.Account) {
-	// unnecessary
-}
+//func (driver Native) Proxy(r *http.Request, account *model.Account) {
+//	// unnecessary
+//}
 
 func (driver Native) Preview(path string, account *model.Account) (interface{}, error) {
 	return nil, base.ErrNotSupport
 }
 
 func (driver Native) MakeDir(path string, account *model.Account) error {
+	if utils.IsContain(strings.Split(path, "/"), "..") {
+		return base.ErrRelativePath
+	}
 	fullPath := filepath.Join(account.RootFolder, path)
 	err := os.MkdirAll(fullPath, 0700)
 	return err
 }
 
 func (driver Native) Move(src string, dst string, account *model.Account) error {
+	if utils.IsContain(strings.Split(src+"/"+dst, "/"), "..") {
+		return base.ErrRelativePath
+	}
 	fullSrc := filepath.Join(account.RootFolder, src)
 	fullDst := filepath.Join(account.RootFolder, dst)
 	return os.Rename(fullSrc, fullDst)
@@ -172,6 +190,9 @@ func (driver Native) Rename(src string, dst string, account *model.Account) erro
 }
 
 func (driver Native) Copy(src string, dst string, account *model.Account) error {
+	if utils.IsContain(strings.Split(src+"/"+dst, "/"), "..") {
+		return base.ErrRelativePath
+	}
 	fullSrc := filepath.Join(account.RootFolder, src)
 	fullDst := filepath.Join(account.RootFolder, dst)
 	srcFile, err := driver.File(src, account)
@@ -191,6 +212,9 @@ func (driver Native) Copy(src string, dst string, account *model.Account) error 
 }
 
 func (driver Native) Delete(path string, account *model.Account) error {
+	if utils.IsContain(strings.Split(path, "/"), "..") {
+		return base.ErrRelativePath
+	}
 	fullPath := filepath.Join(account.RootFolder, path)
 	file, err := driver.File(path, account)
 	if err != nil {
@@ -205,6 +229,9 @@ func (driver Native) Delete(path string, account *model.Account) error {
 func (driver Native) Upload(file *model.FileStream, account *model.Account) error {
 	if file == nil {
 		return base.ErrEmptyFile
+	}
+	if utils.IsContain(strings.Split(file.ParentPath, "/"), "..") {
+		return base.ErrRelativePath
 	}
 	fullPath := filepath.Join(account.RootFolder, file.ParentPath, file.Name)
 	_, err := driver.File(filepath.Join(file.ParentPath, file.Name), account)
@@ -225,6 +252,16 @@ func (driver Native) Upload(file *model.FileStream, account *model.Account) erro
 	defer func() {
 		_ = out.Close()
 	}()
+	//var buf bytes.Buffer
+	//reader := io.TeeReader(file, &buf)
+	//h := md5.New()
+	//_, err = io.Copy(h, reader)
+	//if err != nil {
+	//	return err
+	//}
+	//hash := hex.EncodeToString(h.Sum(nil))
+	//log.Debugln("md5:", hash)
+	//_, err = io.Copy(out, &buf)
 	_, err = io.Copy(out, file)
 	return err
 }

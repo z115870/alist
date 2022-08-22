@@ -10,7 +10,6 @@ import (
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
-	"github.com/gin-gonic/gin"
 	jsoniter "github.com/json-iterator/go"
 	log "github.com/sirupsen/logrus"
 	"path/filepath"
@@ -120,9 +119,14 @@ func (driver PikPak) Link(args base.Args, account *model.Account) (*base.Link, e
 	if err != nil {
 		return nil, err
 	}
-	return &base.Link{
+	link := base.Link{
 		Url: resp.WebContentLink,
-	}, nil
+	}
+	if len(resp.Medias) > 0 && resp.Medias[0].Link.Url != "" {
+		log.Debugln("use media link")
+		link.Url = resp.Medias[0].Link.Url
+	}
+	return &link, nil
 }
 
 func (driver PikPak) Path(path string, account *model.Account) (*model.File, []model.File, error) {
@@ -142,9 +146,9 @@ func (driver PikPak) Path(path string, account *model.Account) (*model.File, []m
 	return nil, files, nil
 }
 
-func (driver PikPak) Proxy(c *gin.Context, account *model.Account) {
-
-}
+//func (driver PikPak) Proxy(r *http.Request, account *model.Account) {
+//
+//}
 
 func (driver PikPak) Preview(path string, account *model.Account) (interface{}, error) {
 	return nil, base.ErrNotSupport

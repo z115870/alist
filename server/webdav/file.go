@@ -7,6 +7,14 @@ package webdav
 import (
 	"context"
 	"fmt"
+	"mime"
+	"net"
+	"net/http"
+	"path"
+	"path/filepath"
+	"strings"
+	"time"
+
 	"github.com/Xhofe/alist/conf"
 	"github.com/Xhofe/alist/drivers/base"
 	"github.com/Xhofe/alist/drivers/operate"
@@ -14,49 +22,77 @@ import (
 	"github.com/Xhofe/alist/server/common"
 	"github.com/Xhofe/alist/utils"
 	log "github.com/sirupsen/logrus"
-	"net"
-	"net/http"
-	"path"
-	"path/filepath"
-	"strings"
-	"time"
 )
 
 type FileSystem struct{}
 
+var upFileMap = make(map[string]*model.File)
+
 func (fs *FileSystem) File(rawPath string) (*model.File, error) {
 	rawPath = utils.ParsePath(rawPath)
-	if model.AccountsCount() > 1 && rawPath == "/" {
-		now := time.Now()
-		return &model.File{
-			Name:      "root",
-			Size:      0,
-			Type:      conf.FOLDER,
-			Driver:    "root",
-			UpdatedAt: &now,
-		}, nil
+	if f, ok := upFileMap[rawPath]; ok {
+		return f, nil
 	}
 	account, path_, driver, err := common.ParsePath(rawPath)
+	log.Debugln(account, path_, driver, err)
 	if err != nil {
+		if err.Error() == "path not found" {
+			accountFiles := model.GetAccountFilesByPath(rawPath)
+			if len(accountFiles) != 0 {
+				now := time.Now()
+				return &model.File{
+					Name:      "root",
+					Size:      0,
+					Type:      conf.FOLDER,
+					UpdatedAt: &now,
+				}, nil
+			}
+		}
 		return nil, err
 	}
-	return driver.File(path_, account)
+	file, err := operate.File(driver, account, path_)
+	if err != nil && err.Error() == "path not found" {
+		accountFiles := model.GetAccountFilesByPath(rawPath)
+		if len(accountFiles) != 0 {
+			now := time.Now()
+			return &model.File{
+				Name:      "root",
+				Size:      0,
+				Type:      conf.FOLDER,
+				UpdatedAt: &now,
+			}, nil
+		}
+	}
+	return file, err
 }
 
-func (fs *FileSystem) Files(rawPath string) ([]model.File, error) {
+func (fs *FileSystem) Files(ctx context.Context, rawPath string) ([]model.File, error) {
 	rawPath = utils.ParsePath(rawPath)
-	if model.AccountsCount() > 1 && rawPath == "/" {
-		files, err := model.GetAccountFiles()
-		if err != nil {
-			return nil, err
-		}
-		return files, nil
-	}
-	account, path_, driver, err := common.ParsePath(rawPath)
+	//var files []model.File
+	//var err error
+	//if model.AccountsCount() > 1 && rawPath == "/" {
+	//	files, err = model.GetAccountFilesByPath("/")
+	//} else {
+	//	account, path_, driver, err := common.ParsePath(rawPath)
+	//	if err != nil {
+	//		return nil, err
+	//	}
+	//	files, err = operate.Files(driver, account, path_)
+	//}
+	_, files, _, _, _, err := common.Path(rawPath)
 	if err != nil {
 		return nil, err
 	}
-	return driver.Files(path_, account)
+	meta, _ := model.GetMetaByPath(rawPath)
+	if visitor := ctx.Value("visitor"); visitor != nil {
+		if visitor.(bool) {
+			log.Debug("visitor")
+			files = common.Hide(meta, files)
+		}
+	} else {
+		log.Debug("admin")
+	}
+	return files, nil
 }
 
 func ClientIP(r *http.Request) string {
@@ -78,7 +114,7 @@ func ClientIP(r *http.Request) string {
 	return ""
 }
 
-func (fs *FileSystem) Link(r *http.Request, rawPath string) (string, error) {
+func (fs *FileSystem) Link(w http.ResponseWriter, r *http.Request, rawPath string) (string, error) {
 	rawPath = utils.ParsePath(rawPath)
 	log.Debugf("get link path: %s", rawPath)
 	if model.AccountsCount() > 1 && rawPath == "/" {
@@ -93,12 +129,25 @@ func (fs *FileSystem) Link(r *http.Request, rawPath string) (string, error) {
 	if r.TLS != nil {
 		protocol = "https"
 	}
+	// 直接返回
+	if account.WebdavDirect {
+		file, err := fs.File(rawPath)
+		if err != nil {
+			return "", err
+		}
+		link_, err := driver.Link(base.Args{Path: path_, Header: r.Header}, account)
+		if err != nil {
+			return "", err
+		}
+		err = common.Proxy(w, r, link_, file)
+		return "", err
+	}
 	if driver.Config().OnlyProxy || account.WebdavProxy {
 		link = fmt.Sprintf("%s://%s/p%s", protocol, r.Host, rawPath)
-		if conf.GetBool("check down link") {
-			sign := utils.SignWithToken(utils.Base(rawPath), conf.Token)
-			link += "?sign" + sign
-		}
+		//if conf.GetBool("check down link") {
+		sign := utils.SignWithToken(utils.Base(rawPath), conf.Token)
+		link += "?sign=" + sign
+		//}
 	} else {
 		link_, err := driver.Link(base.Args{Path: path_, IP: ClientIP(r)}, account)
 		if err != nil {
@@ -126,29 +175,47 @@ func (fs *FileSystem) CreateDirectory(ctx context.Context, rawPath string) error
 	return operate.MakeDir(driver, account, path_, true)
 }
 
-func (fs *FileSystem) Upload(ctx context.Context, r *http.Request, rawPath string) error {
+func (fs *FileSystem) Upload(ctx context.Context, r *http.Request, rawPath string) (FileInfo, error) {
 	rawPath = utils.ParsePath(rawPath)
 	if model.AccountsCount() > 1 && rawPath == "/" {
-		return ErrNotImplemented
+		return nil, ErrNotImplemented
 	}
 	account, path_, driver, err := common.ParsePath(rawPath)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	//fileSize, err := strconv.ParseUint(r.Header.Get("Content-Length"), 10, 64)
 	fileSize := uint64(r.ContentLength)
-	//if err != nil {
-	//	return err
-	//}
 	filePath, fileName := filepath.Split(path_)
+	now := time.Now()
+	fi := &model.File{
+		Name:      fileName,
+		Size:      0,
+		UpdatedAt: &now,
+	}
+	if fileSize == 0 {
+		// 如果文件大小为0，默认成功
+		upFileMap[rawPath] = fi
+		return fi, nil
+	} else {
+		delete(upFileMap, rawPath)
+	}
+	mimeType := r.Header.Get("Content-Type")
+	if mimeType == "" || strings.ToLower(mimeType) == "application/octet-stream" {
+		mimeTypeTmp := mime.TypeByExtension(path.Ext(fileName))
+		if mimeTypeTmp != "" {
+			mimeType = mimeTypeTmp
+		} else {
+			mimeType = "application/octet-stream"
+		}
+	}
 	fileData := model.FileStream{
-		MIMEType:   r.Header.Get("Content-Type"),
+		MIMEType:   mimeType,
 		File:       r.Body,
 		Size:       fileSize,
 		Name:       fileName,
 		ParentPath: filePath,
 	}
-	return operate.Upload(driver, account, &fileData, true)
+	return fi, operate.Upload(driver, account, &fileData, true)
 }
 
 func (fs *FileSystem) Delete(rawPath string) error {
@@ -260,7 +327,7 @@ func walkFS(
 		depth = 0
 	}
 
-	files, err := fs.Files(name)
+	files, err := fs.Files(ctx, name)
 	if err != nil {
 		return err
 	}

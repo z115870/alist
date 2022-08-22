@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+
 	"github.com/Xhofe/alist/bootstrap"
 	"github.com/Xhofe/alist/conf"
 	_ "github.com/Xhofe/alist/drivers"
@@ -12,7 +13,6 @@ import (
 )
 
 func Init() bool {
-	//bootstrap.InitLog()
 	bootstrap.InitConf()
 	bootstrap.InitCron()
 	bootstrap.InitModel()
@@ -22,11 +22,12 @@ func Init() bool {
 			log.Errorf(err.Error())
 			return false
 		}
-		log.Infof("current password: %s", pass.Value)
+		fmt.Printf("your password: %s\n", pass.Value)
 		return false
 	}
 	server.InitIndex()
 	bootstrap.InitSettings()
+	bootstrap.InitAuth()
 	bootstrap.InitAccounts()
 	bootstrap.InitCache()
 	return true
@@ -34,7 +35,8 @@ func Init() bool {
 
 func main() {
 	if conf.Version {
-		fmt.Printf("Built At: %s\nGo Version: %s\nAuthor: %s\nCommit ID: %s\nVersion: %s\n", conf.BuiltAt, conf.GoVersion, conf.GitAuthor, conf.GitCommit, conf.GitTag)
+		fmt.Printf("Built At: %s\nGo Version: %s\nAuthor: %s\nCommit ID: %s\nVersion: %s\nWebVersion: %s\n",
+			conf.BuiltAt, conf.GoVersion, conf.GitAuthor, conf.GitCommit, conf.GitTag, conf.WebTag)
 		return
 	}
 	if !Init() {
